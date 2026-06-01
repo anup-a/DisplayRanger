@@ -74,11 +74,29 @@ final class DisplayManager: ObservableObject {
     // MARK: Mutating the arrangement
 
     /// Move a single display so its top-left sits at `newOrigin` (display space).
-    /// macOS snaps displays to be edge-adjacent, so the committed position may
-    /// differ slightly from the requested one — we refresh afterward to reflect it.
+    ///
+    /// We commit the *whole* arrangement (not just the dragged display) and shift it
+    /// so the current primary stays pinned at origin (0,0). macOS makes whichever
+    /// display sits at (0,0) the primary, so committing only the dragged origin lets
+    /// a drag that vacates or lands on (0,0) silently change which display is primary.
+    /// Pinning the existing primary keeps it primary — dragging only repositions.
+    ///
+    /// macOS still snaps displays edge-adjacent, so the committed position may differ
+    /// slightly from the requested one — we refresh afterward to reflect it.
     @discardableResult
     func move(displayID: CGDirectDisplayID, to newOrigin: CGPoint) -> Bool {
-        applyOrigins([displayID: newOrigin])
+        var origins: [CGDirectDisplayID: CGPoint] = [:]
+        for d in displays { origins[d.id] = d.origin }
+        origins[displayID] = newOrigin
+
+        if let primary = displays.first(where: { $0.isPrimary }),
+           let primaryOrigin = origins[primary.id] {
+            let dx = -primaryOrigin.x, dy = -primaryOrigin.y
+            for (id, pt) in origins {
+                origins[id] = CGPoint(x: pt.x + dx, y: pt.y + dy)
+            }
+        }
+        return applyOrigins(origins)
     }
 
     /// Apply a full set of origins in one transaction (used by drag-drop and profile restore).
