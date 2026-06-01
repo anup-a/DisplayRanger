@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Drag-to-arrange canvas. Tiles are sized by each display's **physical** size so a
-/// 27" monitor visibly dwarfs a 14" laptop, positioned by the macOS point
-/// arrangement, and scaled so the whole set fits the canvas with no overlap. Device
+/// Drag-to-arrange canvas. Tiles are sized by each display's **physical** size (so a
+/// 27" monitor dwarfs a 14" laptop) and **packed edge-to-edge** following the macOS
+/// arrangement, so displays stick together like the native Displays pane. Device
 /// chrome is drawn *inside* each tile, so nothing protrudes into a neighbour.
 struct DisplayCanvasView: View {
     @EnvironmentObject var manager: DisplayManager
@@ -76,12 +76,13 @@ struct DisplayCanvasView: View {
             }
             .onEnded { value in
                 defer { draggingID = nil; dragOffset = .zero }
-                guard layout.positionScale > 0 else { return }
-                // Canvas translation → display-space points uses the *position* scale.
-                let dx = value.translation.width / layout.positionScale
-                let dy = value.translation.height / layout.positionScale
+                // Canvas translation → display points via this tile's own density;
+                // macOS then snaps the moved display contiguous to its neighbours.
+                let perPx = layout.displayPointsPerCanvasPoint(for: display)
+                guard perPx > 0 else { return }
                 manager.move(displayID: display.id,
-                             to: CGPoint(x: display.origin.x + dx, y: display.origin.y + dy))
+                             to: CGPoint(x: display.origin.x + value.translation.width * perPx,
+                                         y: display.origin.y + value.translation.height * perPx))
             }
     }
 
@@ -94,103 +95,120 @@ struct DisplayCanvasView: View {
     }
 }
 
-/// Maps displays to canvas cells: physical-size tiles placed at point-arrangement
-/// centres, uniformly scaled by `sizeScale`. Pure geometry — no SwiftUI.
+/// Packs displays into canvas cells: physical-size tiles laid **edge-to-edge** along
+/// the macOS arrangement (no gaps — displays stick together), then uniformly scaled
+/// by `sizeScale` and centred. Pure geometry — no SwiftUI.
 struct CanvasLayout {
     private let cells: [CGDirectDisplayID: CGRect]
-    /// Canvas points per display point (for converting drag deltas back to display space).
-    let positionScale: CGFloat
+    private let displays: [CGDirectDisplayID: DisplayModel]
 
     init(displays: [DisplayModel], canvas: CGSize, padding: CGFloat, sizeScale: CGFloat) {
-        guard !displays.isEmpty else { cells = [:]; positionScale = 0; return }
-        let geom = LayoutGeometry(displays: displays, canvas: canvas, padding: padding)
-        positionScale = geom.positionScale
+        var byID: [CGDirectDisplayID: DisplayModel] = [:]
+        for d in displays { byID[d.id] = d }
+        self.displays = byID
+
+        guard !displays.isEmpty else { cells = [:]; return }
+        let pack = DisplayPacker.pack(displays)            // edge-to-edge, unit (mm) space
+        let usableW = max(canvas.width - padding * 2, 1)
+        let offX = padding + (usableW - pack.bounds.width * sizeScale) / 2
+        let usableH = max(canvas.height - padding * 2, 1)
+        let offY = padding + (usableH - pack.bounds.height * sizeScale) / 2
+
         var rects: [CGDirectDisplayID: CGRect] = [:]
-        for d in displays {
-            let c = geom.center(d)
-            let size = geom.cellSize(d, sizeScale: sizeScale)
-            rects[d.id] = CGRect(x: c.x - size.width / 2, y: c.y - size.height / 2,
-                                 width: size.width, height: size.height)
+        for (id, r) in pack.cells {
+            rects[id] = CGRect(x: (r.minX - pack.bounds.minX) * sizeScale + offX,
+                               y: (r.minY - pack.bounds.minY) * sizeScale + offY,
+                               width: r.width * sizeScale, height: r.height * sizeScale)
         }
         cells = rects
     }
 
     func cell(for display: DisplayModel) -> CGRect { cells[display.id] ?? .zero }
 
-    /// Largest tile-size scale that keeps every cell inside the canvas and prevents
-    /// any two cells from overlapping, given the point-arrangement centres.
+    /// Display points per canvas point for a tile (for converting drag deltas).
+    func displayPointsPerCanvasPoint(for display: DisplayModel) -> CGFloat {
+        let w = cells[display.id]?.width ?? 0
+        return w > 0 ? display.bounds.width / w : 0
+    }
+
+    /// Largest scale that fits the packed arrangement inside the padded canvas.
     static func fitSizeScale(displays: [DisplayModel], canvas: CGSize, padding: CGFloat) -> CGFloat {
         guard !displays.isEmpty else { return 0 }
-        let geom = LayoutGeometry(displays: displays, canvas: canvas, padding: padding)
-        var k = CGFloat.greatestFiniteMagnitude
-
-        // Canvas-fit: each cell (at unit scale) must fit centred within the padded canvas.
-        for d in displays {
-            let c = geom.center(d), u = geom.unitCell(d)
-            k = min(k,
-                    2 * (c.x - padding) / u.width,
-                    2 * (canvas.width - padding - c.x) / u.width,
-                    2 * (c.y - padding) / u.height,
-                    2 * (canvas.height - padding - c.y) / u.height)
-        }
-        // Pairwise no-overlap along the axis on which the two displays are separated.
-        let gap: CGFloat = 8
-        for i in 0..<displays.count {
-            for j in (i + 1)..<displays.count {
-                let a = displays[i], b = displays[j]
-                let ca = geom.center(a), cb = geom.center(b)
-                let ua = geom.unitCell(a), ub = geom.unitCell(b)
-                let sepX = a.bounds.maxX <= b.bounds.minX + 1 || b.bounds.maxX <= a.bounds.minX + 1
-                if sepX {
-                    let need = (ua.width + ub.width) / 2
-                    if need > 0 { k = min(k, (abs(ca.x - cb.x) - gap) / need) }
-                } else {
-                    let need = (ua.height + ub.height) / 2
-                    if need > 0 { k = min(k, (abs(ca.y - cb.y) - gap) / need) }
-                }
-            }
-        }
-        return max(k, 0.0001) * 0.98
+        let pack = DisplayPacker.pack(displays)
+        let usableW = max(canvas.width - padding * 2, 1)
+        let usableH = max(canvas.height - padding * 2, 1)
+        let s = min(usableW / max(pack.bounds.width, 1), usableH / max(pack.bounds.height, 1))
+        return max(s, 0.0001) * 0.98
     }
 }
 
-/// Shared point-arrangement → canvas math (centres, per-display cell sizing).
-private struct LayoutGeometry {
-    let canvas: CGSize
-    let unionCenter: CGPoint
-    let positionScale: CGFloat
+/// Lays display cells edge-to-edge in unit (millimetre) space, mirroring the macOS
+/// point arrangement: each non-anchor display is attached to an already-placed
+/// neighbour on the shared edge, offset along that edge by the same fraction it has
+/// in point space. Cell = physical screen + device chrome reserved below it.
+enum DisplayPacker {
+    struct Result { let cells: [CGDirectDisplayID: CGRect]; let bounds: CGRect }
 
-    init(displays: [DisplayModel], canvas: CGSize, padding: CGFloat) {
-        self.canvas = canvas
-        var union = displays[0].bounds
-        for d in displays.dropFirst() { union = union.union(d.bounds) }
-        unionCenter = CGPoint(x: union.midX, y: union.midY)
-        let usableW = max(canvas.width - padding * 2, 1)
-        let usableH = max(canvas.height - padding * 2, 1)
-        positionScale = min(usableW / max(union.width, 1), usableH / max(union.height, 1))
+    static func pack(_ displays: [DisplayModel]) -> Result {
+        guard let anchor = displays.first(where: { $0.isPrimary }) ?? displays.first else {
+            return Result(cells: [:], bounds: .zero)
+        }
+        var placed: [CGDirectDisplayID: CGRect] = [anchor.id: rect(at: .zero, for: anchor)]
+        var queue = [anchor]
+
+        while let p = queue.first {
+            queue.removeFirst()
+            for q in displays where placed[q.id] == nil {
+                guard let side = side(of: q, relativeTo: p) else { continue }
+                placed[q.id] = place(q, side: side, near: p, pRect: placed[p.id]!)
+                queue.append(q)
+            }
+        }
+        // Disconnected displays (rare): drop them to the right of the union.
+        var union = placed.values.first ?? .zero
+        for r in placed.values { union = union.union(r) }
+        for d in displays where placed[d.id] == nil {
+            let r = rect(at: CGPoint(x: union.maxX + 12, y: union.minY), for: d)
+            placed[d.id] = r
+            union = union.union(r)
+        }
+        return Result(cells: placed, bounds: union)
     }
 
-    func center(_ d: DisplayModel) -> CGPoint {
-        CGPoint(x: (d.bounds.midX - unionCenter.x) * positionScale + canvas.width / 2,
-                y: (d.bounds.midY - unionCenter.y) * positionScale + canvas.height / 2)
-    }
+    private enum Side { case right, left, above, below }
 
-    /// Tile size at scale 1: physical width drives size; height = screen (by aspect)
-    /// + device chrome reserved inside the cell.
-    func unitCell(_ d: DisplayModel) -> CGSize {
-        let w = basePhysicalWidth(d)
+    private static func cellSize(_ d: DisplayModel) -> CGSize {
+        let w = d.physicalWidthMM > 0 ? d.physicalWidthMM : d.bounds.width
         let chrome = DeviceChrome.height(kind: d.isBuiltin ? .laptop : .allInOne, screenWidth: w)
         return CGSize(width: w, height: w / d.aspect + chrome)
     }
 
-    func cellSize(_ d: DisplayModel, sizeScale: CGFloat) -> CGSize {
-        let u = unitCell(d)
-        return CGSize(width: u.width * sizeScale, height: u.height * sizeScale)
+    private static func rect(at origin: CGPoint, for d: DisplayModel) -> CGRect {
+        CGRect(origin: origin, size: cellSize(d))
     }
 
-    /// Physical width in mm, or the point width when the display doesn't report a
-    /// physical size (e.g. Sidecar / virtual displays).
-    private func basePhysicalWidth(_ d: DisplayModel) -> CGFloat {
-        d.physicalWidthMM > 0 ? d.physicalWidthMM : d.bounds.width
+    /// Which side of `p` display `q` sits on, if their point bounds share an edge.
+    private static func side(of q: DisplayModel, relativeTo p: DisplayModel) -> Side? {
+        let tol: CGFloat = 2
+        let a = p.bounds, b = q.bounds
+        let yOverlap = a.minY < b.maxY - tol && b.minY < a.maxY - tol
+        let xOverlap = a.minX < b.maxX - tol && b.minX < a.maxX - tol
+        if abs(b.minX - a.maxX) <= tol && yOverlap { return .right }
+        if abs(b.maxX - a.minX) <= tol && yOverlap { return .left }
+        if abs(b.minY - a.maxY) <= tol && xOverlap { return .below }
+        if abs(b.maxY - a.minY) <= tol && xOverlap { return .above }
+        return nil
+    }
+
+    private static func place(_ q: DisplayModel, side: Side, near p: DisplayModel, pRect: CGRect) -> CGRect {
+        let s = cellSize(q)
+        let fracY = (q.bounds.minY - p.bounds.minY) / max(p.bounds.height, 1)
+        let fracX = (q.bounds.minX - p.bounds.minX) / max(p.bounds.width, 1)
+        switch side {
+        case .right: return CGRect(x: pRect.maxX, y: pRect.minY + fracY * pRect.height, width: s.width, height: s.height)
+        case .left:  return CGRect(x: pRect.minX - s.width, y: pRect.minY + fracY * pRect.height, width: s.width, height: s.height)
+        case .below: return CGRect(x: pRect.minX + fracX * pRect.width, y: pRect.maxY, width: s.width, height: s.height)
+        case .above: return CGRect(x: pRect.minX + fracX * pRect.width, y: pRect.minY - s.height, width: s.width, height: s.height)
+        }
     }
 }
