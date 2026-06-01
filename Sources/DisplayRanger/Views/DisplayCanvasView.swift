@@ -72,18 +72,61 @@ struct DisplayCanvasView: View {
                     draggingID = display.id
                     selectedID = display.id
                 }
-                dragOffset = value.translation
+                // Always snap the live preview flush to a neighbour — a display can
+                // never be dragged into a detached or overlapping position.
+                dragOffset = snappedOffset(for: display, rawTranslation: value.translation, layout: layout)
             }
             .onEnded { value in
+                let snapped = snappedOffset(for: display, rawTranslation: value.translation, layout: layout)
                 defer { draggingID = nil; dragOffset = .zero }
-                // Canvas translation → display points via this tile's own density;
-                // macOS then snaps the moved display contiguous to its neighbours.
                 let perPx = layout.displayPointsPerCanvasPoint(for: display)
                 guard perPx > 0 else { return }
                 manager.move(displayID: display.id,
-                             to: CGPoint(x: display.origin.x + value.translation.width * perPx,
-                                         y: display.origin.y + value.translation.height * perPx))
+                             to: CGPoint(x: display.origin.x + snapped.width * perPx,
+                                         y: display.origin.y + snapped.height * perPx))
             }
+    }
+
+    /// Snap the dragged tile flush against whichever neighbour edge is nearest, so the
+    /// arrangement is always contiguous (sticky) and never overlapping. Returns the
+    /// canvas-space offset from the tile's resting cell to its snapped position.
+    private func snappedOffset(for display: DisplayModel,
+                               rawTranslation: CGSize,
+                               layout: CanvasLayout) -> CGSize {
+        let me = layout.cell(for: display)
+        let others = manager.displays.filter { $0.id != display.id }.map { layout.cell(for: $0) }
+        guard !others.isEmpty, me.width > 0 else { return rawTranslation }
+
+        let free = me.offsetBy(dx: rawTranslation.width, dy: rawTranslation.height)
+        var best: CGRect?
+        var bestDist = CGFloat.greatestFiniteMagnitude
+
+        for o in others {
+            // Keep ≥30% overlap along the shared edge so it stays attached while sliding.
+            let minVOverlap = min(me.height, o.height) * 0.3
+            let yClamped = min(max(free.minY, o.minY - me.height + minVOverlap), o.maxY - minVOverlap)
+            let minHOverlap = min(me.width, o.width) * 0.3
+            let xClamped = min(max(free.minX, o.minX - me.width + minHOverlap), o.maxX - minHOverlap)
+
+            let candidates = [
+                CGRect(x: o.maxX, y: yClamped, width: me.width, height: me.height),            // right of o
+                CGRect(x: o.minX - me.width, y: yClamped, width: me.width, height: me.height),  // left of o
+                CGRect(x: xClamped, y: o.maxY, width: me.width, height: me.height),             // below o
+                CGRect(x: xClamped, y: o.minY - me.height, width: me.width, height: me.height), // above o
+            ]
+            for c in candidates where !overlapsAny(c, others) {
+                let d = hypot(c.midX - free.midX, c.midY - free.midY)
+                if d < bestDist { bestDist = d; best = c }
+            }
+        }
+        guard let b = best else { return rawTranslation }
+        return CGSize(width: b.minX - me.minX, height: b.minY - me.minY)
+    }
+
+    /// True if `rect` meaningfully overlaps any of `others` (edge-touching is allowed).
+    private func overlapsAny(_ rect: CGRect, _ others: [CGRect]) -> Bool {
+        let r = rect.insetBy(dx: 1, dy: 1)
+        return others.contains { $0.intersects(r) }
     }
 
     /// Identity of the current display *set* (sizes, not positions) + canvas size.
