@@ -20,9 +20,24 @@ struct DisplayModel: Identifiable, Equatable {
     let pixelHeight: Int
     /// Refresh rate in Hz (0 if unavailable, e.g. some built-in panels report 0).
     let refreshHz: Double
+    /// Physical screen size in millimetres (`CGDisplayScreenSize`); 0 if the display
+    /// doesn't report it (e.g. some virtual / Sidecar displays). Used to scale canvas
+    /// tiles by real-world size so a 27" monitor visibly dwarfs a 14" laptop.
+    let physicalWidthMM: CGFloat
+    let physicalHeightMM: CGFloat
 
     var origin: CGPoint { bounds.origin }
     var size: CGSize { bounds.size }
+
+    /// Aspect ratio (width / height) from the point bounds.
+    var aspect: CGFloat { bounds.width / max(bounds.height, 1) }
+
+    /// Diagonal in inches, or nil when the physical size is unknown.
+    var diagonalInches: Double? {
+        guard physicalWidthMM > 0, physicalHeightMM > 0 else { return nil }
+        let mm = (physicalWidthMM * physicalWidthMM + physicalHeightMM * physicalHeightMM).squareRoot()
+        return Double(mm) / 25.4
+    }
 
     /// Human-readable type label for the info panel.
     var typeLabel: String {

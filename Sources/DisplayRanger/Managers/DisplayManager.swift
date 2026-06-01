@@ -55,6 +55,7 @@ final class DisplayManager: ObservableObject {
             let builtin = CGDisplayIsBuiltin(id) != 0
             let sidecar = Self.looksLikeSidecar(name: name, isBuiltin: builtin)
             let mode = CGDisplayCopyDisplayMode(id)
+            let mm = CGDisplayScreenSize(id)   // physical size in millimetres
             return DisplayModel(
                 id: id,
                 name: name,
@@ -64,7 +65,9 @@ final class DisplayManager: ObservableObject {
                 isSidecar: sidecar,
                 pixelWidth: mode?.pixelWidth ?? Int(bounds.width),
                 pixelHeight: mode?.pixelHeight ?? Int(bounds.height),
-                refreshHz: mode?.refreshRate ?? 0
+                refreshHz: mode?.refreshRate ?? 0,
+                physicalWidthMM: mm.width,
+                physicalHeightMM: mm.height
             )
         }
 

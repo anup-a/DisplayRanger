@@ -18,17 +18,22 @@ struct DeviceChrome: View {
     let screenWidth: CGFloat
     let aluminum: Color
 
-    /// Total drawn height, used by the caller to offset the chrome below the screen.
-    var height: CGFloat {
+    /// Total drawn height, used by the caller to reserve space for the chrome
+    /// *within* the tile cell (no protrusion into neighbours).
+    var height: CGFloat { Self.height(kind: kind, screenWidth: screenWidth) }
+
+    /// Chrome height for a given screen width — used by the canvas layout to size
+    /// each tile's cell so the chrome fits inside it.
+    static func height(kind: Kind, screenWidth: CGFloat) -> CGFloat {
         switch kind {
-        case .laptop:    return screenWidth * 0.052
-        case .allInOne:  return chinHeight + neckHeight + footHeight
+        case .laptop:    return screenWidth * 0.050
+        case .allInOne:  return screenWidth * (0.050 + 0.035 + 0.018)  // chin + neck + foot
         }
     }
 
-    private var chinHeight: CGFloat { screenWidth * 0.080 }
-    private var neckHeight: CGFloat { screenWidth * 0.065 }
-    private var footHeight: CGFloat { screenWidth * 0.028 }
+    private var chinHeight: CGFloat { screenWidth * 0.050 }
+    private var neckHeight: CGFloat { screenWidth * 0.035 }
+    private var footHeight: CGFloat { screenWidth * 0.018 }
 
     var body: some View {
         switch kind {
