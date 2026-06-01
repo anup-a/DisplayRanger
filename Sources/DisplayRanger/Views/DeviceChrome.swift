@@ -21,7 +21,7 @@ struct DeviceChrome: View {
     /// Total drawn height, used by the caller to offset the chrome below the screen.
     var height: CGFloat {
         switch kind {
-        case .laptop:    return screenWidth * 0.075
+        case .laptop:    return screenWidth * 0.052
         case .allInOne:  return chinHeight + neckHeight + footHeight
         }
     }
@@ -37,8 +37,8 @@ struct DeviceChrome: View {
         }
     }
 
-    // MARK: MacBook — a foreshortened keyboard deck (tapered, rounded front,
-    // centered thumb scoop) with a darker hinge bar where it meets the screen.
+    // MARK: MacBook — a thin foreshortened deck (gently tapered, rounded front,
+    // small centered thumb notch) with a recessed dark hinge where it meets the lid.
 
     private var laptop: some View {
         let w = screenWidth
@@ -46,20 +46,21 @@ struct DeviceChrome: View {
         return ZStack(alignment: .top) {
             LaptopDeck()
                 .fill(
-                    LinearGradient(colors: [aluminum.opacity(0.68), aluminum],
+                    LinearGradient(colors: [aluminum.opacity(0.78), aluminum],
                                    startPoint: .top, endPoint: .bottom)
                 )
-                .overlay(LaptopDeck().stroke(Color.black.opacity(0.18), lineWidth: 0.5))
+                .overlay(  // bright front lip to suggest the slab's thickness
+                    LaptopDeck().stroke(Color.white.opacity(0.22), lineWidth: 0.6)
+                )
                 .frame(width: w, height: h)
 
-            // Hinge bar, flush at the top where the lid meets the deck.
-            RoundedRectangle(cornerRadius: h * 0.22, style: .continuous)
-                .fill(aluminum.opacity(0.45))
-                .frame(width: w * 0.74, height: max(2, h * 0.16))
-                .offset(y: -h * 0.04)
+            // Recessed dark hinge line, flush where the lid meets the deck.
+            Capsule(style: .continuous)
+                .fill(Color(white: 0.22))
+                .frame(width: w * 0.5, height: max(1.5, h * 0.20))
         }
         .frame(width: w, height: h)
-        .shadow(color: .black.opacity(0.28), radius: 2.5, y: 1.5)
+        .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
     }
 
     // MARK: iMac — flush chin, slim neck, curved foot (all within screen width).
@@ -90,10 +91,10 @@ struct DeviceChrome: View {
 private struct LaptopDeck: Shape {
     func path(in rect: CGRect) -> Path {
         var p = Path()
-        let topInset = rect.width * 0.085
-        let r = min(rect.height * 0.55, rect.width * 0.05)
-        let scoopW = rect.width * 0.16
-        let scoopDepth = rect.height * 0.42
+        let topInset = rect.width * 0.045          // gentle taper — not a funnel
+        let r = min(rect.height * 0.45, rect.width * 0.03)
+        let scoopW = rect.width * 0.11             // small, subtle thumb notch
+        let scoopDepth = rect.height * 0.55
         let midX = rect.midX
 
         // Top edge (at the hinge), inset on both sides for the taper.

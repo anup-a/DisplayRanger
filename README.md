@@ -54,12 +54,20 @@ cd DisplayRanger
 swift run            # builds and launches the app
 ```
 
-Release binary:
+### Install as a real app
+
+Package the release binary into a proper, ad‑hoc‑signed `DisplayRanger.app` (with an
+icon and bundle id) and drop it in `/Applications`:
 
 ```bash
-swift build -c release
-.build/release/DisplayRanger
+./Scripts/package-app.sh --install     # → /Applications/DisplayRanger.app
+open -a DisplayRanger
 ```
+
+Omit `--install` to just build `build/DisplayRanger.app`. Installing as a bundle is what
+enables **Launch at login** (`SMAppService` needs a bundle identifier; under `swift run`
+the toggle is shown disabled). The bundle is ad‑hoc signed and **not** sandboxed — locally
+built apps aren't quarantined, so Gatekeeper won't block it.
 
 > **Must run non‑sandboxed.** Display reconfiguration uses the public
 > `CGBeginDisplayConfiguration` / `CGConfigureDisplayOrigin` /
